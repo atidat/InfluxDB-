@@ -361,7 +361,7 @@ type FieldIterator interface {
   
   ```
 
-- scanTags：
+- scanTags
 
   ```go
   // scanTags examines all the tags in a Point, keeping track of and
@@ -486,4 +486,129 @@ type FieldIterator interface {
   }
   ```
 
+
+- pointKey
+
+- NewPointFromBytes：解析序列化的point返回Point
+
+  ```go
+  func NewPointFromBytes(b []byte) (Point, error) {
+  	p := &point{}
+      // b内容：前4位是key(measurement+tags)的长度，key的内容，fields的长度，fields内容，时间戳
+  	if err := p.UnmarshalBinary(b); err != nil { return nil, err }
   
+  	// 生成field的迭代器，用于检查field的key/value是否合法
+  	iter := p.FieldIterator()
+  	var hasField bool
+  	for iter.Next() {
+  		if len(iter.FieldKey()) == 0 { continue }
+  		hasField = true
+  		switch iter.Type() {
+  		case Float:
+  			_, err := iter.FloatValue()
+  			if err != nil {
+  				return nil, fmt.Errorf("unable to unmarshal field %s: %s", string(iter.FieldKey()), err)
+  			}
+  		case Integer:
+  			_, err := iter.IntegerValue()
+  			if err != nil {
+  				return nil, fmt.Errorf("unable to unmarshal field %s: %s", string(iter.FieldKey()), err)
+  			}
+  		case Unsigned:
+  			_, err := iter.UnsignedValue()
+  			if err != nil {
+  				return nil, fmt.Errorf("unable to unmarshal field %s: %s", string(iter.FieldKey()), err)
+  			}
+  		case String:
+  			// Skip since this won't return an error
+  		case Boolean:
+  			_, err := iter.BooleanValue()
+  			if err != nil {
+  				return nil, fmt.Errorf("unable to unmarshal field %s: %s", string(iter.FieldKey()), err)
+  			}
+  		}
+  	}
+  
+  	if !hasField {
+  		return nil, ErrPointMustHaveAField
+  	}
+  
+  	return p, nil
+  }
+  ```
+
+- MakeKey：从Tag集合构造key(measurement+tags)
+
+- AppendMakeKey：从现有key中，追加新的tags k/v
+
+- （Tags)AppendHashKey
+
+  ```go
+  func MakeKey(name []byte, tags Tags) []byte {
+  	return AppendMakeKey(nil, name, tags)
+  }
+  
+  func AppendMakeKey(dst []byte, name []byte, tags Tags) []byte {
+  	dst = append(dst, EscapeMeasurement(unescapeMeasurement(name))...)
+  	dst = tags.AppendHashKey(dst)
+  	return dst
+  }
+  
+  func (a Tags) AppendHashKey(dst []byte) []byte {
+  	if len(a) == 0 { return dst }
+  
+  	sz := 0	// 输入的dst和输出的dst，不是同一个指针的空间，所以sz是返回值的空间大小
+  	var escaped Tags
+  	if a.needsEscape() {
+  		var tmp [20]Tag
+  		if len(a) < len(tmp) {
+  			escaped = tmp[:len(a)]
+  		} else {
+  			escaped = make(Tags, len(a))
+  		}
+  
+  		for i := range a {
+  			t := &a[i]
+  			nt := &escaped[i]
+  			nt.Key = escapeTag(t.Key)
+  			nt.Value = escapeTag(t.Value)
+  			sz += len(nt.Key) + len(nt.Value)
+  		}
+  	} else {
+  		sz = a.Size()
+  		escaped = a
+  	}
+  
+  	sz += len(escaped) + (len(escaped) * 2) // separators
+  
+  	if cap(dst)-len(dst) < sz {
+  		nd := make([]byte, len(dst), len(dst)+sz)
+  		copy(nd, dst)
+  		dst = nd
+  	}
+  	buf := dst[len(dst) : len(dst)+sz]
+  	idx := 0
+  	for i := range escaped { 	// escaped是已经处理过转义的tag k/v
+  		k := &escaped[i]
+  		if len(k.Value) == 0 { continue }
+  		buf[idx] = ','			// 每一对tag k/v通过,分割
+  		idx++
+  		copy(buf[idx:], k.Key)  // 对内存的操作都是通过copy实现的，指针的移动通过索引
+  		idx += len(k.Key)		// 指针的移动通过索引
+  		buf[idx] = '='
+  		idx++
+  		copy(buf[idx:], k.Value)
+  		idx += len(k.Value)
+  	}
+  	return dst[:len(dst)+idx]	// 返回新的内存空间，和传入的dst不是同一块空间
+  }
+  
+  ```
+
+- ValidToken：校验字节流是unicode编码格式 && 可打印字符 && 不可替换字符
+
+- ValidTagTokens
+
+- ValidKeyTokens
+
+- CheckToken
